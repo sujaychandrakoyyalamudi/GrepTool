@@ -197,13 +197,13 @@ Extra keyword arguments, such as `name` and `description`, go to `BaseTool`. The
 | Field | Default | Notes |
 |---|---|---|
 | `query` | required | |
-| `paths` | required | A single path string |
+| `paths` | `"."` | A single path string. With `root_path` set, it must resolve inside the root, and `"."` searches the whole root |
 | `mode` | `"exact"` | `exact`, `regex`, `fuzzy`, `semantic` or `hybrid`; unknown values fall back to exact |
 | `case_sensitive` | `False` | |
 | `max_results` | `20` | |
 | `context_lines` | `2` | |
 
-For each call the tool sets `context_lines`, `max_results` and `case_sensitive` on its config from the input, runs the search, restores the old values, and returns text listing each match with path, line, score, match type and context lines. With no matches it returns `No results found for query: '...' (mode: ...)`.
+For each call the tool sets `context_lines`, `max_results` and `case_sensitive` on its config from the input, runs the search, restores the old values, and returns text listing each match with path, line, score, match type and context lines. With no matches it returns `No results found for query: '...' (mode: ...)`. For a path outside `root_path` it returns `Error: path '...' is outside the search root '...'` and a hint, without searching.
 
 ```python
 from llm_greptool import LangChainGrepTool
@@ -216,7 +216,9 @@ Because the input has several fields, the tool needs an agent that supports tool
 
 Behavior to know about:
 
-- `root_path` is prepended to `paths` unless `paths` starts with `/`. Absolute paths and `..` are not blocked, so `root_path` does not limit what the tool can read.
+- With `root_path` set, `paths` is resolved against it with `os.path.realpath`, which follows `..` and symlinks. Absolute paths work if they resolve inside the root. A path that resolves outside it, including through a symlink, is rejected with the error message above rather than an exception, so the agent can try again. Result paths are absolute paths under the resolved root.
+- While walking a directory, the search skips symbolic links (files and directories), like `grep -r`, so a link inside the root can't expose files outside it.
+- Without `root_path`, `paths` is used as given and nothing is confined.
 - `default_mode` is stored but not used. The mode always comes from the input, which defaults to `"exact"`.
 - `_arun` calls the synchronous `_run`.
 
@@ -241,7 +243,7 @@ It returns up to three tools:
 | `semantic_grep` (if `enable_semantic`) | `SemanticGrepTool` | `mode=SEMANTIC`, `top_k_semantic=15` |
 | `regex_grep` (if `enable_regex`) | `RegexGrepTool` | `mode=REGEX` |
 
-Because the mode comes from the tool input, all three tools run exact search unless the caller passes `mode`. The `semantic_grep` and `regex_grep` descriptions do not ask the model to send `mode`. The input's `max_results` (default 20) and `context_lines` (default 2) also replace the config values on every call.
+All three tools are confined to `root_path` in the same way as `LangChainGrepTool`. Because the mode comes from the tool input, all three tools run exact search unless the caller passes `mode`. The `semantic_grep` and `regex_grep` descriptions do not ask the model to send `mode`. The input's `max_results` (default 20) and `context_lines` (default 2) also replace the config values on every call.
 
 ## Examples
 
@@ -266,7 +268,7 @@ python -m pytest llm_greptool/tests.py -v
 
 Pass the file path: pytest's default discovery looks for `test_*.py` files and skips `tests.py`. The test module imports `llm_greptool` as a package, so it needs `langchain-core` and `pydantic`.
 
-The 14 tests cover exact search and case-insensitivity, regex search and invalid patterns, context lines, the recursive walk and `.gitignore`, `to_dict()` and `to_json()`, and creating and running `LLMGrepTool`. Fuzzy, semantic, hybrid, archive search and the CLI have no tests.
+The 21 tests cover exact search and case-insensitivity, regex search and invalid patterns, context lines, the recursive walk and `.gitignore`, `to_dict()` and `to_json()`, creating and running `LLMGrepTool`, and `root_path` confinement: absolute, `../` and symlinked paths outside the root are rejected (also by the `create_grep_tools()` tools), symlinked files met while walking a directory are skipped, a relative path inside it works, and leaving out `paths` searches the root. Fuzzy, semantic, hybrid, archive search and the CLI have no tests.
 
 ## Roadmap (not implemented yet)
 

@@ -4,6 +4,7 @@ LangChain integration for LLM GrepTool.
 Provides LangChain-compatible tool wrappers for use with agents and chains.
 """
 
+import os
 from typing import Type, List, Optional, Dict, Any
 from langchain_core.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
@@ -15,7 +16,7 @@ from .core import GrepTool, SearchMode, SearchResult, SearchConfig
 class GrepToolInput(BaseModel):
     """Input schema for the GrepTool."""
     query: str = Field(..., description="Search query (text, regex pattern, or natural language)")
-    paths: str = Field(..., description="File path or directory path to search")
+    paths: str = Field(default=".", description="File path or directory path to search")
     mode: str = Field(default="exact", description="Search mode: exact, regex, fuzzy, semantic, or hybrid")
     case_sensitive: bool = Field(default=False, description="Whether search is case-sensitive")
     max_results: int = Field(default=20, description="Maximum number of results to return")
@@ -97,7 +98,7 @@ class LLMGrepTool(BaseTool):
     def _run(
         self,
         query: str,
-        paths: str,
+        paths: str = ".",
         mode: str = "exact",
         case_sensitive: bool = False,
         max_results: int = 20,
@@ -128,9 +129,21 @@ class LLMGrepTool(BaseTool):
         
         search_mode = mode_map.get(mode.lower(), SearchMode.EXACT)
         
-        # Use root_path if provided and paths is relative
-        if self.root_path and not paths.startswith('/'):
-            search_paths = [self.root_path + "/" + paths]
+        # Confine the search to root_path: resolve the path against the root,
+        # following ".." and symlinks, and refuse anything that ends up outside.
+        if self.root_path:
+            root = os.path.realpath(self.root_path)
+            try:
+                target = os.path.realpath(os.path.join(root, paths))
+                inside = os.path.commonpath([root, target]) == root
+            except ValueError:  # null byte in the path, or another drive on Windows
+                inside = False
+            if not inside:
+                return (
+                    f"Error: path {paths!r} is outside the search root {self.root_path!r}. "
+                    "Use a path inside the root, or omit paths to search the whole root."
+                )
+            search_paths = [target]
         else:
             search_paths = [paths]
         
@@ -163,7 +176,7 @@ class LLMGrepTool(BaseTool):
     async def _arun(
         self,
         query: str,
-        paths: str,
+        paths: str = ".",
         mode: str = "exact",
         case_sensitive: bool = False,
         max_results: int = 20,

@@ -190,7 +190,12 @@ class GrepTool:
             # Filter files
             for filename in filenames:
                 file_path = current_path / filename
-                
+
+                # Like `grep -r`, skip symbolic links found while walking:
+                # a link can point outside the directory being searched.
+                if file_path.is_symlink():
+                    continue
+
                 if self._should_ignore(file_path, gitignore_patterns):
                     continue
                 
