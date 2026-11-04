@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 from llm_greptool import GrepTool, SearchMode, SearchResult, SearchConfig
-from llm_greptool.langchain_integration import LLMGrepTool
+from llm_greptool.langchain_integration import LLMGrepTool, create_grep_tools
 
 
 class TestExactSearch:
@@ -269,6 +269,95 @@ class TestSearchModes:
                 mode=mode
             )
             assert isinstance(results, list)
+
+
+class TestRootPathConfinement:
+    """Test that the LangChain tools only search inside root_path."""
+
+    @pytest.fixture
+    def root(self, tmp_path):
+        """Create a root with one file, next to a directory that holds a secret."""
+        root = tmp_path / "root"
+        (root / "src").mkdir(parents=True)
+        (root / "src" / "app.py").write_text("needle inside\n")
+        (tmp_path / "outside").mkdir()
+        (tmp_path / "outside" / "secret.txt").write_text("needle TOP_SECRET\n")
+        return root
+
+    def test_absolute_path_outside_root_is_rejected(self, root):
+        """Test that an absolute path outside the root returns an error."""
+        tool = LLMGrepTool(root_path=str(root))
+        result = tool.invoke({"query": "needle", "paths": str(root.parent / "outside")})
+
+        assert result.startswith("Error: path")
+        assert "outside the search root" in result
+        assert "TOP_SECRET" not in result
+
+    def test_parent_directory_path_is_rejected(self, root):
+        """Test that a path climbing out of the root with ../ returns an error."""
+        tool = LLMGrepTool(root_path=str(root))
+        result = tool.invoke({"query": "needle", "paths": "../outside"})
+
+        assert result.startswith("Error: path")
+        assert "TOP_SECRET" not in result
+
+    def test_symlink_to_outside_is_rejected(self, root):
+        """Test that a symlink inside the root that points outside returns an error."""
+        try:
+            (root / "link").symlink_to(root.parent / "outside", target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks are not supported on this system")
+
+        tool = LLMGrepTool(root_path=str(root))
+        result = tool.invoke({"query": "needle", "paths": "link"})
+
+        assert result.startswith("Error: path")
+        assert "TOP_SECRET" not in result
+
+    def test_symlinked_file_inside_searched_directory_is_skipped(self, root):
+        """Test that a symlinked file met while walking a directory is not read."""
+        try:
+            (root / "src" / "leak.txt").symlink_to(root.parent / "outside" / "secret.txt")
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks are not supported on this system")
+
+        tool = LLMGrepTool(root_path=str(root))
+        result = tool.invoke({"query": "needle"})
+
+        assert result.startswith("Found 1 result(s)")
+        assert "app.py" in result
+        assert "TOP_SECRET" not in result
+
+        # The core search skips the link too, like `grep -r`
+        results = GrepTool().search("needle", paths=[str(root)], mode=SearchMode.EXACT)
+        assert [r.line_content.strip() for r in results] == ["needle inside"]
+
+    def test_relative_path_inside_root_is_searched(self, root):
+        """Test that a relative path inside the root still works."""
+        tool = LLMGrepTool(root_path=str(root))
+        result = tool.invoke({"query": "needle", "paths": "src"})
+
+        assert result.startswith("Found 1 result(s)")
+        assert "app.py" in result
+
+    def test_no_paths_searches_whole_root(self, root):
+        """Test that leaving out paths searches root_path."""
+        tool = LLMGrepTool(root_path=str(root))
+        result = tool.invoke({"query": "needle"})
+
+        assert result.startswith("Found 1 result(s)")
+        assert "app.py" in result
+        assert "TOP_SECRET" not in result
+
+    def test_create_grep_tools_are_confined(self, root):
+        """Test that every tool from create_grep_tools() rejects outside paths."""
+        tools = create_grep_tools(root_path=str(root))
+
+        assert len(tools) == 3
+        for tool in tools:
+            result = tool.invoke({"query": "needle", "paths": "../outside"})
+            assert result.startswith("Error: path"), tool.name
+            assert "TOP_SECRET" not in result
 
 
 if __name__ == "__main__":

@@ -79,7 +79,8 @@ python -m llm_greptool.cli -s "parse the gitignore file" llm_greptool    # needs
 
 ## Safety and limits
 
-- `root_path` on the LangChain tools is only prepended to relative paths. Absolute paths and `..` are not blocked, so an agent can search any file the process can read.
+- The LangChain tools confine each search to `root_path`. The requested path is resolved against it with `os.path.realpath`, which follows `..` and symlinks, and a path that ends up outside the root gets an error message instead of results. Leaving out `paths` searches the whole root. Without `root_path`, paths are used as given.
+- While walking a directory, the search skips symbolic links, like `grep -r`, so a link inside the root can't expose files outside it. A symlink passed directly in `paths` is followed, but the LangChain tools still reject it if it resolves outside the root.
 - The LangChain tools ignore `default_mode`. The mode comes from the tool input and defaults to `"exact"`, so `code_search`, `semantic_grep` and `regex_grep` all run exact search unless the input sets `mode`.
 - `.git/`, virtual environments and other hidden directories are searched unless the `.gitignore` in the searched directory excludes them. Binary files are read as UTF-8 with errors ignored.
 - Only the `.gitignore` in each directory passed in `paths` is used. Negation (`!`), `**` and globs that contain `/` are not supported.
@@ -114,7 +115,7 @@ pip install pytest
 python -m pytest llm_greptool/tests.py -v
 ```
 
-Pass the file path: pytest's default discovery looks for `test_*.py` files and skips `tests.py`. The 14 tests cover exact and regex search, context lines, the recursive walk and `.gitignore`, result serialization and the LangChain wrapper. Fuzzy, semantic, hybrid, archive search and the CLI have no tests.
+Pass the file path: pytest's default discovery looks for `test_*.py` files and skips `tests.py`. The 21 tests cover exact and regex search, context lines, the recursive walk and `.gitignore`, result serialization, the LangChain wrapper and its `root_path` confinement, including symlinks. Fuzzy, semantic, hybrid, archive search and the CLI have no tests.
 
 ## Roadmap (not implemented yet)
 
